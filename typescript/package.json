@@ -4,11 +4,15 @@
   "description": "Scripts for setting up and transferring USDRise from SUI to Neutron via Axelar.",
   "main": "dist/transfer.js",
   "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc",
     "setup": "npm run build && node dist/setup.js",
     "transfer": "npm run build && node dist/transfer.js",
-    "monitor": "npm run build && node dist/monitor.js"
+    "monitor": "npm run build && node dist/monitor.js",
+    "transfer-with-example-call": "npm run build && node dist/transfer_with_example_call.js",
+    "register-token": "npm run build && node dist/register_token.js"
   },
+  "keywords": [],
   "dependencies": {
     "@mysten/sui": "^1.3.0",
     "@axelar-network/axelar-cgp-sui": "^1.1.3",
