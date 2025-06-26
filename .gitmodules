@@ -1,0 +1,3 @@
+[submodule "axelar-cgp-sui"]
+	path = axelar-cgp-sui
+	url = https://github.com/axelarnetwork/axelar-cgp-sui.git
