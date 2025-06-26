@@ -11,11 +11,11 @@
 import {
   SuiClient,
   getFullnodeUrl,
-  TransactionBlock,
-  Ed25519Keypair,
   SuiObjectResponse,
   SuiEvent,
-} from "@mysten/sui";
+} from "@mysten/sui/client";
+import { Transaction } from "@mysten/sui/transactions";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { Buffer } from "buffer";
 
 // --- Configuration ---
@@ -51,7 +51,12 @@ function getKeypair(privateKeyBase64: string): Ed25519Keypair {
     );
   }
   try {
-    const privateKeyBytes = Buffer.from(privateKeyBase64, "base64");
+    const privateKeyBytes = Buffer.from(
+      privateKeyBase64.startsWith("suiprivkey1")
+        ? privateKeyBase64.slice(10)
+        : privateKeyBase64,
+      "base64"
+    );
     // Sui expects a 32-byte private key for Ed25519, and the first byte is a flag.
     return Ed25519Keypair.fromSecretKey(privateKeyBytes.slice(1));
   } catch (error) {
@@ -114,7 +119,7 @@ async function setupUSDRise() {
     console.log("Found Coin Metadata ID:", coinMetadata.data.objectId);
 
     // 2. Build the transaction to register USDRise with ITS
-    const tx = new TransactionBlock();
+    const tx = new Transaction();
     tx.moveCall({
       target: `${PACKAGE_ID}::its_integration::register_usdrise_with_cap`,
       arguments: [
@@ -125,8 +130,8 @@ async function setupUSDRise() {
     });
 
     console.log("Executing transaction to register USDRise with ITS...");
-    const registerResult = await client.signAndExecuteTransactionBlock({
-      transactionBlock: tx,
+    const registerResult = await client.signAndExecuteTransaction({
+      transaction: tx,
       signer: keypair,
       options: { showEffects: true, showEvents: true },
     });
