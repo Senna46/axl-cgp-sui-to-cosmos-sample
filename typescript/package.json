@@ -1,0 +1,23 @@
+{
+  "name": "usdrise-neutron-transfer",
+  "version": "1.0.0",
+  "description": "Scripts for setting up and transferring USDRise from SUI to Neutron via Axelar.",
+  "main": "dist/transfer.js",
+  "scripts": {
+    "build": "tsc",
+    "setup": "npm run build && node dist/setup.js",
+    "transfer": "npm run build && node dist/transfer.js",
+    "monitor": "npm run build && node dist/monitor.js"
+  },
+  "dependencies": {
+    "@mysten/sui": "^1.3.0",
+    "@axelar-network/axelar-cgp-sui": "^1.1.3",
+    "axios": "^1.7.2",
+    "bech32": "^2.0.0",
+    "ethers": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "typescript": "^5.3.3"
+  }
+} 

@@ -1,0 +1,26 @@
+# General
+.DS_Store
+.env
+.env.*
+*.log
+*.lock
+
+# IDE configuration
+.vscode/
+.idea/
+
+# Node.js / TypeScript
+typescript/node_modules/
+typescript/dist/
+typescript/coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Rust / Cargo
+# Ignore all target directories created by Cargo builds
+**/target/
+
+# Sui / Move
+# Ignore build artifacts from `sui move build`
+sui-project/build/ 
