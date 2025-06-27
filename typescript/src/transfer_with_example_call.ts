@@ -18,7 +18,7 @@ import { Buffer } from "buffer";
 
 // --- Configuration ---
 // Replace with your actual values.
-const NETWORK = "testnet"; // or 'mainnet', 'devnet'
+const NETWORK: "mainnet" | "testnet" | "devnet" = "testnet"; // or 'mainnet', 'devnet'
 const DESTINATION_CHAIN = "ethereum-sepolia"; // "neutron";
 
 // --- Main Package IDs ---
@@ -131,6 +131,7 @@ async function transferUSDRiseToNeutronWithExample(
     const client = getSuiClient();
     const keypair = getKeypair(YOUR_PRIVATE_KEY_BASE64);
     const senderAddress = keypair.toSuiAddress();
+    const amountBigInt = BigInt(amount);
 
     console.log(
         `Initiating transfer of ${amount} USDRise to ${address} via example::its...`
@@ -150,22 +151,10 @@ async function transferUSDRiseToNeutronWithExample(
             );
         }
 
-        // Use the first coin object found that is large enough.
-        const sourceCoin = userCoins.find(
-            (coin) => BigInt(coin.balance) >= BigInt(amount)
-        );
-        if (!sourceCoin) {
-            const totalBalance = userCoins.reduce(
-                (acc, coin) => acc + BigInt(coin.balance),
-                BigInt(0)
-            );
-            throw new Error(
-                `Insufficient USDRISE balance. Required: ${amount}, Total available: ${totalBalance}.`
-            );
-        }
-        console.log(
-            `Found a suitable USDRISE coin with ID: ${sourceCoin.coinObjectId} and balance: ${sourceCoin.balance}`
-        );
+        const tx = new Transaction();
+
+        // Prepare the coin for transfer, merging if necessary.
+        const coinToSend = prepareTransferCoin(tx, userCoins, amountBigInt);
 
         // // For cosmos addresses,Decode Neutron address to byte array
         // const decoded = bech32.decode(address);
@@ -174,26 +163,18 @@ async function transferUSDRiseToNeutronWithExample(
         // The "0x" prefix must be removed.
         const addressBytes = Buffer.from(address.slice(2), "hex");
 
-        // Create the transaction block
-        const tx = new Transaction();
-
         // 1. Create the TokenId struct from the raw ID bytes.
         const [tokenIdArg] = tx.moveCall({
             target: `${ITS_PACKAGE_ID}::token_id::from_u256`,
             arguments: [tx.pure(bcs.u256().serialize(TOKEN_ID))],
         });
 
-        // 2. Create a new coin with the exact amount to be transferred
-        const [coinToSend] = tx.splitCoins(tx.object(sourceCoin.coinObjectId), [
-            tx.pure(bcs.u64().serialize(amount)),
-        ]);
-
-        // 3. Split SUI coin for gas payment on Axelar
+        // 2. Split SUI coin for gas payment on Axelar
         const [gasCoin] = tx.splitCoins(tx.gas, [
-            tx.pure(bcs.u64().serialize(20_000_000)), // 0.02 SUI for gas
+            tx.pure(bcs.u64().serialize(100_000_000)), // 0.1 SUI for gas (increased from 0.02 SUI)
         ]);
 
-        // 4. Call the `send_interchain_transfer_call` wrapper function
+        // 3. Call the `send_interchain_transfer_call` wrapper function
         tx.moveCall({
             target: `${EXAMPLE_PACKAGE_ID}::its::send_interchain_transfer_call`,
             typeArguments: [TOKEN_ADDRESS],
@@ -246,6 +227,60 @@ async function transferUSDRiseToNeutronWithExample(
             console.error("Unknown error:", error);
         }
         throw error;
+    }
+}
+
+/**
+ * Prepares a coin of a specific amount for transfer.
+ * If a single coin with sufficient balance is not available, it merges multiple coins.
+ * @param tx - The transaction block.
+ * @param coins - The list of available coins for the token.
+ * @param amount - The amount required for the transfer.
+ * @returns A transaction argument representing the coin to be sent.
+ */
+function prepareTransferCoin(
+    tx: Transaction,
+    coins: { coinObjectId: string; balance: string }[],
+    amount: bigint
+): ReturnType<typeof tx.splitCoins>[0] {
+    const totalBalance = coins.reduce(
+        (acc, coin) => acc + BigInt(coin.balance),
+        BigInt(0)
+    );
+
+    if (totalBalance < amount) {
+        throw new Error(
+            `Insufficient USDRISE balance. Required: ${amount}, Total available: ${totalBalance}.`
+        );
+    }
+
+    // Attempt to find a single coin that can cover the amount
+    const primaryCoin = coins.find((coin) => BigInt(coin.balance) >= amount);
+
+    if (primaryCoin) {
+        console.log(
+            `Found a single coin with sufficient balance: ${primaryCoin.coinObjectId}`
+        );
+        // If a single large enough coin is found, just split it
+        return tx.splitCoins(tx.object(primaryCoin.coinObjectId), [
+            tx.pure(bcs.u64().serialize(amount)),
+        ])[0];
+    } else {
+        // If no single coin is large enough, merge them
+        console.log("No single coin is large enough. Merging coins...");
+        const [firstCoin, ...otherCoins] = coins;
+        const primaryCoinObject = tx.object(firstCoin.coinObjectId);
+        const otherCoinObjects = otherCoins.map((coin) =>
+            tx.object(coin.coinObjectId)
+        );
+
+        tx.mergeCoins(primaryCoinObject, otherCoinObjects);
+        console.log(`Merged ${coins.length} coins into ${firstCoin.coinObjectId}`);
+
+        // After merging, the primary coin will have the total balance, so we can split from it
+        return tx.splitCoins(primaryCoinObject, [
+            tx.pure(bcs.u64().serialize(amount)),
+        ])[0];
     }
 }
 
