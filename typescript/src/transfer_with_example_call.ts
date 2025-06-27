@@ -1,13 +1,4 @@
 // USDRise Transfer Script using example::its::send_interchain_transfer_call
-// This script executes the transfer of USDRise tokens from SUI to a specified Neutron address.
-// It simplifies the transaction by using the `send_interchain_transfer_call` function from the `example::its` module.
-// This wrapper function bundles several steps (prepare, send, pay gas) into a single on-chain call.
-//
-// Pre-requisites:
-// 1. The `example::its` module must be deployed on the network.
-// 2. The ID of the `Singleton` object created by the `example::its` module must be known.
-//
-// All configuration values are placeholders and must be replaced with actual values.
 
 import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
@@ -15,11 +6,11 @@ import { bcs } from "@mysten/sui/bcs";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { bech32 } from "bech32";
 import { Buffer } from "buffer";
+import { AxelarQueryAPI, Environment } from "@axelar-network/axelarjs-sdk";
 
 // --- Configuration ---
 // Replace with your actual values.
 const NETWORK: "mainnet" | "testnet" | "devnet" = "testnet"; // or 'mainnet', 'devnet'
-const DESTINATION_CHAIN = "ethereum-sepolia"; // "neutron";
 
 // --- Main Package IDs ---
 // This is the package containing your token (e.g., USDRise)
@@ -70,6 +61,35 @@ const YOUR_PRIVATE_KEY_BASE64 =
  */
 function getSuiClient() {
     return new SuiClient({ url: getFullnodeUrl(NETWORK) });
+}
+
+/**
+ * Estimates the Axelar gas fee for cross-chain transfers.
+ * @param srcChain - Source chain name (e.g., "sui")
+ * @param dstChain - Destination chain name (e.g., "ethereum-sepolia")
+ * @param gasLimit - An estimated gas amount required to execute the function on the destination chain
+ * @param symbol - Optional token symbol
+ * @returns The estimated gas fee
+ * @throws If the gas estimation fails
+ */
+export async function estimateAxelarGasFee(
+    srcChain: string,
+    dstChain: string,
+    gasLimit: bigint | string | number,
+    symbol?: string
+) {
+    try {
+        const environment = NETWORK === "mainnet" ? Environment.MAINNET : Environment.TESTNET;
+        const api = new AxelarQueryAPI({ environment });
+        const gas = await api.estimateGasFee(srcChain, dstChain, gasLimit, "auto", symbol);
+        console.log(`Axelar GMP Gas Estimated for ${srcChain} -> ${dstChain}:`, gas);
+        return gas;
+    } catch (error) {
+        console.error("Failed to estimate Axelar gas fee:", error);
+        throw new Error(
+            `Gas estimation failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+    }
 }
 
 /**
@@ -156,12 +176,18 @@ async function transferUSDRiseToNeutronWithExample(
         // Prepare the coin for transfer, merging if necessary.
         const coinToSend = prepareTransferCoin(tx, userCoins, amountBigInt);
 
-        // // For cosmos addresses,Decode Neutron address to byte array
-        // const decoded = bech32.decode(address);
-        // const addressBytes = Buffer.from(bech32.fromWords(decoded.words));
-        // For Ethereum addresses, convert the hex string to a byte array.
-        // The "0x" prefix must be removed.
-        const addressBytes = Buffer.from(address.slice(2), "hex");
+        let addressBytes: Buffer;
+        if (address.startsWith("0x")) {
+            // For Ethereum addresses, convert the hex string to a byte array.
+            // The "0x" prefix must be removed.
+            addressBytes = Buffer.from(address.slice(2), "hex");
+        } else {
+            // For cosmos addresses,Decode Neutron address to byte array
+            const decoded = bech32.decode(address);
+            addressBytes = Buffer.from(bech32.fromWords(decoded.words));
+        }
+
+
 
         // 1. Create the TokenId struct from the raw ID bytes.
         const [tokenIdArg] = tx.moveCall({
@@ -169,9 +195,41 @@ async function transferUSDRiseToNeutronWithExample(
             arguments: [tx.pure(bcs.u256().serialize(TOKEN_ID))],
         });
 
-        // 2. Split SUI coin for gas payment on Axelar
+        // 2. Estimate Axelar gas fee and prepare gas coin
+        console.log("Estimating Axelar gas fee...");
+        let gasAmount: bigint;
+        try {
+            // Estimate gas for the destination chain (default 200,000 gas limit for token transfers)
+            const estimatedGas = await estimateAxelarGasFee(
+                "sui",
+                destinationChain,
+                200000
+            );
+
+            // Convert the gas estimation to SUI units and add some buffer (20%)
+            let gasInWei: bigint;
+            if (typeof estimatedGas === "string") {
+                gasInWei = BigInt(estimatedGas);
+            } else {
+                // If it's an object with a fee property, extract it
+                gasInWei = BigInt((estimatedGas as any).fee || estimatedGas);
+            }
+
+            // Convert from wei to SUI (1 SUI = 10^9 wei) and add 20% buffer
+            gasAmount = (gasInWei * BigInt(120)) / BigInt(100); // Add 20% buffer
+
+            // Minimum gas amount: 0.05 SUI
+            const minGasAmount = BigInt(50_000_000); // 0.05 SUI
+            gasAmount = gasAmount < minGasAmount ? minGasAmount : gasAmount;
+
+            console.log(`Estimated gas amount: ${gasAmount} (${Number(gasAmount) / 1e9} SUI)`);
+        } catch (error) {
+            console.warn("Failed to estimate gas, using default amount:", error);
+            gasAmount = BigInt(100_000_000); // Fallback to 0.1 SUI
+        }
+
         const [gasCoin] = tx.splitCoins(tx.gas, [
-            tx.pure(bcs.u64().serialize(100_000_000)), // 0.1 SUI for gas (increased from 0.02 SUI)
+            tx.pure(bcs.u64().serialize(gasAmount)),
         ]);
 
         // 3. Call the `send_interchain_transfer_call` wrapper function
@@ -185,7 +243,7 @@ async function transferUSDRiseToNeutronWithExample(
                 tx.object(GAS_SERVICE_ID),
                 tokenIdArg,
                 coinToSend,
-                tx.pure(bcs.string().serialize(DESTINATION_CHAIN)),
+                tx.pure(bcs.string().serialize(destinationChain)),
                 tx.pure(bcs.vector(bcs.u8()).serialize(addressBytes)),
                 tx.pure(bcs.vector(bcs.u8()).serialize([])), // metadata
                 tx.pure(bcs.Address.serialize(keypair.toSuiAddress())), // refund_address
@@ -287,9 +345,10 @@ function prepareTransferCoin(
 // --- Execution Example ---
 // Replace with the actual amount and destination address before running.
 const exampleAmount = "1000000"; // 1 USDRise (assuming 6 decimals)
-const exampleNeutronAddress = "0x4793755541Ae9f950a68Fc7fc2B3BD2CC9397b9A"; // "neutron155u042u8wk3al32h3vzxu989jj76k4zcwg0u68";
+const destinationAddress = "0x4793755541Ae9f950a68Fc7fc2B3BD2CC9397b9A"; // "neutron155u042u8wk3al32h3vzxu989jj76k4zcwg0u68";
+const destinationChain = "ethereum-sepolia"; // "neutron";
 
-transferUSDRiseToNeutronWithExample(exampleAmount, exampleNeutronAddress).catch(
+transferUSDRiseToNeutronWithExample(exampleAmount, destinationAddress).catch(
     (error) => {
         console.error("Transfer script failed to execute.");
         if (error instanceof Error) {
